@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter">
-  <img src="https://img.shields.io/badge/TensorFlow%20Lite-INT8-FF6F00?logo=tensorflow&logoColor=white" alt="TensorFlow Lite">
-  <img src="https://img.shields.io/badge/Test%20Accuracy-95.40%25-success" alt="Test accuracy 95.40%">
+  <img src="https://img.shields.io/badge/TensorFlow%20Lite-Float16-FF6F00?logo=tensorflow&logoColor=white" alt="TensorFlow Lite">
+  <img src="https://img.shields.io/badge/Test%20Accuracy-94.06%25-success" alt="Test accuracy 94.06%">
   <img src="https://img.shields.io/badge/Works-Online%20%2B%20Offline-blue" alt="Online and offline">
   <img src="https://img.shields.io/badge/Languages-English%20%2B%20Urdu-green" alt="English and Urdu">
 </p>
@@ -27,14 +27,15 @@ No internet is needed for diagnosis — an important requirement for farms and v
 
 ## Features
 
-- **On-device AI diagnosis** — INT8-quantized TensorFlow Lite model (3.53 MB) runs fully offline on the phone
-- **12 disease classes** across Maize, Potato and Tomato (see list below)
+- **On-device AI diagnosis** — Float16 TensorFlow Lite model (6.11 MB) runs fully offline on the phone
+- **32 disease classes** across **7 crops** — Maize, Potato, Tomato, Wheat, Sugarcane, Rice and Cotton (see list below)
+- **Scanner-style camera** — live preview with a framing guide; camera photos are auto-straightened and centre-cropped before diagnosis, gallery photos work too
 - **Treatment & prevention advice** for every class, in **English and Urdu**
 - **Login screen** (name + mobile, stored locally on the phone) with a **Guest mode**, so no farmer is ever blocked from a diagnosis
 - **Personal profile** — user details, total diagnoses, pending-sync count and last diagnosis
 - **Diagnosis history** saved locally in SQLite, with an offline sync queue
 - **Online / Offline badge** on the home screen, plus a manual **Sync Now** option
-- **AI Assistant (offline)** — built-in chat that answers questions about all 12 diseases, photo tips, fertilizer, watering and prevention, in English, Urdu or Roman Urdu
+- **AI Assistant (offline)** — built-in chat that answers questions about all 32 diseases, photo tips, fertilizer, watering and prevention, in English, Urdu or Roman Urdu
 - **Voice Assistant** — ask questions by speaking (speech-to-text) and hear the answers spoken back (text-to-speech)
 - **Honest low-confidence handling** — below 60% confidence the app asks for a clearer photo instead of giving a possibly wrong answer
 
@@ -42,13 +43,27 @@ No internet is needed for diagnosis — an important requirement for farms and v
 
 | Item | Detail |
 |---|---|
-| Architecture | MobileNetV3 (transfer learning), trained in Python / TensorFlow-Keras |
-| Dataset | PlantVillage (held-out test set, duplicates removed) |
-| Classes | 12 (Maize 3, Potato 3, Tomato 6) |
-| Test accuracy | **95.40%** |
-| Macro F1-score | **0.942** |
-| Mobile model | `model.tflite` — INT8 quantized, **3.53 MB**, input 224×224 |
+| Architecture | MobileNetV3Large (transfer learning, two-stage fine-tuning), trained in Python / TensorFlow-Keras |
+| Dataset | PlantVillage + Kaggle datasets for Wheat, Sugarcane, Rice and Cotton — ~32,300 images, duplicates removed (MD5), 80/10/10 split |
+| Classes | 32 (Tomato 6, Rice 6, Wheat 5, Sugarcane 5, Cotton 4, Maize 3, Potato 3) |
+| Test accuracy | **94.06%** (2,960 of 3,147 held-out test photos) |
+| Macro F1-score | **0.926** |
+| Mobile model | `model.tflite` — Float16 quantized, **6.11 MB**, input 224×224 |
 | Inference | 100% on-device (TensorFlow Lite), no server needed |
+
+**Accuracy by crop (held-out test set):**
+
+| Crop | Accuracy |
+|---|---|
+| Potato | 99.5% |
+| Maize | 99.4% |
+| Cotton | 98.1% |
+| Tomato | 96.3% |
+| Sugarcane | 89.9% |
+| Wheat | 89.5% |
+| Rice | 85.7% |
+
+> **Quantization finding:** full-integer INT8 quantization was evaluated and **rejected** — its accuracy collapsed on this MobileNetV3 model (a known hard-swish sensitivity), so the app ships the Float16 model, which keeps full accuracy at 6.11 MB. A dynamic-range quantized version (3.34 MB) is kept as a smaller alternative.
 
 ### Supported classes
 
@@ -57,16 +72,18 @@ No internet is needed for diagnosis — an important requirement for farms and v
 | Maize (Corn) | Common Rust, Northern Leaf Blight, Healthy |
 | Potato | Early Blight, Late Blight, Healthy |
 | Tomato | Bacterial Spot, Early Blight, Late Blight, Leaf Mold, Tomato Yellow Leaf Curl Virus, Healthy |
-
-> **Planned expansion:** Wheat (5 classes) and Sugarcane (5 classes) — 22 classes in total — using additional Kaggle datasets, since these crops are not part of PlantVillage.
+| Wheat | Brown Rust, Powdery Mildew, Septoria Leaf Blotch, Yellow Rust, Healthy |
+| Sugarcane | Mosaic, Red Rot, Rust, Yellow Leaf, Healthy |
+| Rice | Bacterial Leaf Blight, Brown Spot, Leaf Blast, Leaf Scald, Sheath Blight, Healthy |
+| Cotton | Bacterial Blight, Fusarium Wilt, Leaf Curl Virus, Healthy |
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Mobile app | Flutter / Dart |
-| AI model | TensorFlow / Keras → TensorFlow Lite (INT8 quantization) |
-| Training | Python, Google Colab / Kaggle notebooks |
+| AI model | TensorFlow / Keras → TensorFlow Lite (Float16 quantization) |
+| Training | Python, Kaggle notebooks (GPU) |
 | Local storage | SQLite (sqflite) |
 | Voice | speech_to_text, flutter_tts |
 | Backend (sync) | FastAPI + PostgreSQL (proposal design) |
@@ -104,8 +121,8 @@ flutter run
 ├── lib/
 │   └── main.dart            # Complete app: UI, TFLite classifier, SQLite, sync, AI + voice assistant
 ├── assets/
-│   ├── model.tflite         # INT8 quantized MobileNetV3 model (3.53 MB)
-│   ├── labels.txt           # 12 class labels (exact training order)
+│   ├── model.tflite         # Float16 MobileNetV3 model (6.11 MB)
+│   ├── labels.txt           # 32 class labels (exact training order)
 │   ├── logo.png             # App logo (AI Scan Leaf)
 │   └── plants_bg.jpg        # Home-screen background (bamboo)
 ├── android/app/src/main/res/  # Android app-icon files (all mipmap sizes)
@@ -127,8 +144,8 @@ flutter run
 
 ## Future Work
 
-- Train the expanded **22-class** model (adding Wheat and Sugarcane)
-- Field testing with real farm photos (outside PlantVillage lab conditions)
+- Field testing with real farm photos (outside PlantVillage lab conditions) and fine-tuning on field data
+- Grad-CAM visual explanations for each diagnosis
 - Complete the FastAPI sync backend so records sync to a live server
 - Publish the app for farmer use in the Mardan region
 
