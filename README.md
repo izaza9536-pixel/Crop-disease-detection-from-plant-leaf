@@ -110,8 +110,7 @@ flutter run
 │   └── plants_bg.jpg        # Home-screen background (bamboo)
 ├── android/app/src/main/res/  # Android app-icon files (all mipmap sizes)
 ├── pubspec.yaml             # Flutter dependencies
-├── ANDROID_PERMISSIONS.txt  # Extra manifest steps for the voice assistant
-└── README_READY.txt         # Package notes
+└── ANDROID_PERMISSIONS.txt  # Extra manifest steps for the voice assistant
 ```
 
 ## Team
