@@ -1,0 +1,19 @@
+PUT YOUR TRAINED MODEL IN THIS FOLDER
+=====================================
+
+Copy your model file into THIS assets folder and name it exactly:
+
+    model.tflite
+
+Where do you get model.tflite?
+  It is in your Kaggle notebook Output:
+      /kaggle/working/fyp_work/results/model.tflite
+  (inside results.zip as well).
+
+Two model files were made by the notebook:
+  * model.tflite        (3.53 MB, int8)   <- USE THIS ONE in the app
+  * model_float16.tflite (6.07 MB)        <- backup; if you ever use it,
+                                             rename it to model.tflite
+
+labels.txt is already in this folder (12 classes, correct order).
+Do NOT edit labels.txt by hand - the order must match the model.

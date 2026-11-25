@@ -1,0 +1,19 @@
+VOICE ASSISTANT - one extra step on your PC (for the mic)
+
+Open this file in Notepad:
+  D:\crop_disease_app\android\app\src\main\AndroidManifest.xml
+
+Just ABOVE the line  <application  paste these two lines:
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+Save the file. Then run:
+  flutter pub get
+  flutter build apk
+
+First time you press the mic in the AI Assistant, the phone will ask
+"Allow CropCare AI to record audio?" - tap Allow.
+The spoken answer (voice reply) uses the phone's own text-to-speech;
+Urdu voice works if the phone has a Urdu TTS voice installed
+(Settings > Accessibility / Text-to-speech). English voice works everywhere.
