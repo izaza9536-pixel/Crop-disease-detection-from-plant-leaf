@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   image_picker: ^1.1.2        # camera + gallery
+  camera: ^0.12.2             # scanner-style camera screen (live preview + frame)
   tflite_flutter: ^0.12.1     # on-device TensorFlow Lite inference
   image: ^4.2.0               # resize / decode the photo in Dart
   sqflite: ^2.3.3             # local SQLite history + sync queue
@@ -27,6 +28,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/model.tflite     # <-- YOU copy your trained model here
-    - assets/labels.txt       # 12 classes, included in this package
+    - assets/labels.txt       # 32 classes, included in this package
     - assets/plants_bg.jpg    # plants background (bottom of home screen)
     - assets/logo.png         # CropCare AI Logo 2 - AI Scan Leaf

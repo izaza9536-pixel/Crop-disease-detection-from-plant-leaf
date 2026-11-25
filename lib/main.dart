@@ -1,12 +1,14 @@
 /// CropCare AI - Crop Disease Detection - Flutter app (Proposal Sections 6.2 and 6.3).
 ///
-/// Updated 2026-11-24 for Izaz's trained 12-class model:
-///   * Works with the INT8 model.tflite from the notebook (3.53 MB).
-///     That model's input is UINT8 raw pixels (0-255) - the [-1, 1]
-///     scaling lives INSIDE the model, so the app must NOT scale.
-///   * labels.txt = the 12 classes of the 2026-11-24 run, in the exact
+/// Updated 2026-11-25 for Izaz's trained 32-class model (7 crops):
+///   * Works with the FLOAT16 model.tflite from the notebook (6.11 MB,
+///     lab accuracy 94.06%). Its input is FLOAT raw pixels (0-255) -
+///     the [-1, 1] scaling lives INSIDE the model, so the app must
+///     NOT scale. (Full INT8 quantization was tested and rejected:
+///     its accuracy collapsed - see the project verification notes.)
+///   * labels.txt = the 32 classes of the 2026-11-25 run, in the exact
 ///     order the notebook produced (alphabetical). Never edit by hand.
-///   * Treatment advice filled in for all 12 classes (English + Urdu).
+///   * Treatment advice filled in for all 32 classes (English + Urdu).
 ///
 /// What the app does:
 ///   * Take a leaf photo (camera) or pick one from the gallery.
@@ -20,7 +22,7 @@
 ///
 /// Files you must add:
 ///   assets/model.tflite   <- from the notebook results (Step 8/9)
-///   assets/labels.txt     <- included in this package (12 classes)
+///   assets/labels.txt     <- included in this package (32 classes)
 /// Packages (see pubspec.yaml): image_picker, tflite_flutter, image,
 /// sqflite, path, http.
 
@@ -38,6 +40,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:camera/camera.dart' as cam;
 
 // ---------------------------------------------------------------------------
 // CONFIG - change these for your project
@@ -48,10 +51,10 @@ const int kInputSize = 224;                 // MobileNetV3 input size
 const double kConfidenceThreshold = 0.60;   // below this -> "uncertain" (8.3)
 const String kBackendBaseUrl = 'http://10.0.2.2:8000'; // emulator -> PC
 // For a real phone on the same Wi-Fi use your PC's IP, e.g. 192.168.1.10:8000
-const int kModelVersion = 1;
+const int kModelVersion = 2;
 
 // ---------------------------------------------------------------------------
-// TREATMENT ADVICE (Section 6.2) - English + Urdu, all 12 classes.
+// TREATMENT ADVICE (Section 6.2) - English + Urdu, all 32 classes.
 // Key = the class label from labels.txt (exact same spelling).
 // General guidance only - always follow the product label and local
 // agriculture department advice for doses.
@@ -176,9 +179,233 @@ const Map<String, Advice> kAdvice = {
     'کسی علاج کی ضرورت نہیں۔ آپ کا پودا صحت مند لگ رہا ہے۔',
     'معمول کے مطابق پانی دیں اور ہر ہفتے پتے چیک کریں۔',
   ),
+  'Wheat___healthy': Advice(
+    'No treatment needed. Your wheat looks healthy.',
+    'Keep normal watering and check the leaves every week, especially '
+        'in cool, humid weather when rusts spread.',
+    'کسی علاج کی ضرورت نہیں۔ آپ کی گندم صحت مند لگ رہی ہے۔',
+    'معمول کے مطابق پانی دیں اور ہر ہفتے پتے چیک کریں، خاص طور پر ٹھنڈے '
+        'مرطوب موسم میں جب زنگ پھیلتا ہے۔',
+  ),
+  'Wheat___Yellow_rust': Advice(
+    'Apply a triazole fungicide (for example propiconazole or '
+        'tebuconazole) as per label instructions, as soon as you see '
+        'the first yellow stripes. This rust spreads very fast in cool '
+        'weather, so do not delay.',
+    'Grow resistant varieties, sow on time, avoid too much nitrogen, '
+        'and check the crop twice a week in February-March.',
+    'جیسے ہی پہلی پیلی دھاریاں نظر آئیں، ٹرائیازول فنگس مار دوا (مثلاً '
+        'پروپیکونازول یا ٹیبوکونازول) ہدایات کے مطابق فوراً استعمال کریں۔ '
+        'یہ زنگ ٹھنڈے موسم میں بہت تیزی سے پھیلتا ہے، دیر نہ کریں۔',
+    'مزاحم اقسام اگائیں، وقت پر بوائی کریں، نائٹروجن زیادہ نہ دیں اور '
+        'فروری-مارچ میں ہفتے میں دو بار فصل چیک کریں۔',
+  ),
+  'Wheat___Brown_rust': Advice(
+    'Apply a triazole fungicide (for example propiconazole) as per '
+        'label instructions when pustules appear on the leaves.',
+    'Grow resistant varieties, rotate crops, and remove volunteer '
+        'wheat plants near the field.',
+    'جب پتوں پر دانے نظر آئیں تو ٹرائیازول فنگس مار دوا (مثلاً '
+        'پروپیکونازول) ہدایات کے مطابق استعمال کریں۔',
+    'مزاحم اقسام اگائیں، فصلیں تبدیل کریں اور کھیت کے قریب خود رو گندم '
+        'کے پودے ختم کریں۔',
+  ),
+  'Wheat___Powdery_mildew': Advice(
+    'Apply wettable sulfur or a triazole fungicide as per label '
+        'instructions. Remove badly infected lower leaves.',
+    'Keep proper spacing for air flow, use balanced nitrogen (too '
+        'much nitrogen makes it worse), and grow resistant varieties.',
+    'سلفر یا ٹرائیازول فنگس مار دوا ہدایات کے مطابق استعمال کریں۔ '
+        'زیادہ متاثرہ نچلے پتے ہٹا دیں۔',
+    'ہوا کے گزر کے لیے مناسب فاصلہ رکھیں، متوازن نائٹروجن دیں (زیادہ '
+        'نائٹروجن بیماری بڑھا دیتی ہے) اور مزاحم اقسام اگائیں۔',
+  ),
+  'Wheat___Septoria_leaf_blotch': Advice(
+    'Apply chlorothalonil or a triazole fungicide as per label '
+        'instructions. Protect the top (flag) leaf - it makes most of '
+        'the grain.',
+    'Rotate crops, bury or remove wheat stubble after harvest, grow '
+        'resistant varieties, and avoid overhead irrigation.',
+    'کلوروتھالونل یا ٹرائیازول فنگس مار دوا ہدایات کے مطابق استعمال '
+        'کریں۔ سب سے اوپر والے پتے (فلیگ لیف) کی حفاظت کریں — دانہ زیادہ '
+        'تر اسی سے بنتا ہے۔',
+    'فصلیں تبدیل کریں، کٹائی کے بعد گندم کی باقیات دفن کریں یا ہٹائیں، '
+        'مزاحم اقسام اگائیں اور اوپر سے آبپاشی نہ کریں۔',
+  ),
+  'Sugarcane___healthy': Advice(
+    'No treatment needed. Your sugarcane looks healthy.',
+    'Use healthy seed setts, keep normal watering, and check the '
+        'leaves every week.',
+    'کسی علاج کی ضرورت نہیں۔ آپ کا گنا صحت مند لگ رہا ہے۔',
+    'صحت مند بیج (سم) استعمال کریں، معمول کے مطابق پانی دیں اور ہر '
+        'ہفتے پتے چیک کریں۔',
+  ),
+  'Sugarcane___Red_rot': Advice(
+    'There is no effective spray for red rot. Dig out and burn or '
+        'bury the infected stools at once, and never take seed setts '
+        'from an infected field.',
+    'Plant only disease-free setts of resistant varieties, treat setts '
+        'with fungicide or hot water before planting, rotate the field, '
+        'and keep it drained - the fungus spreads through water.',
+    'سرخ سڑن کا کوئی مؤثر سپرے نہیں۔ متاثرہ جڑیں (ٹھونٹھ) فوراً نکال '
+        'کر جلا دیں یا دفن کریں، اور متاثرہ کھیت سے کبھی بیج (سم) نہ لیں۔',
+    'صرف مزاحم اقسام کے بیماری سے پاک سم لگائیں، بوائی سے پہلے سم کو '
+        'فنگس مار دوا یا گرم پانی سے علاج کریں، کھیت تبدیل کریں اور نکاسی '
+        'اچھی رکھیں — یہ فنگس پانی سے پھیلتی ہے۔',
+  ),
+  'Sugarcane___Rust': Advice(
+    'Apply mancozeb or a triazole fungicide as per label instructions '
+        'when orange-brown pustules appear under the leaves.',
+    'Grow resistant varieties, keep proper spacing, and use balanced '
+        'fertilizer.',
+    'جب پتوں کے نیچے نارنجی بھورے دانے نظر آئیں تو مینکوزیب یا '
+        'ٹرائیازول فنگس مار دوا ہدایات کے مطابق استعمال کریں۔',
+    'مزاحم اقسام اگائیں، مناسب فاصلہ رکھیں اور متوازن کھاد دیں۔',
+  ),
+  'Sugarcane___Mosaic': Advice(
+    'This is a virus - there is no cure. Remove and destroy infected '
+        'plants, and control aphids (the insects that carry it) with an '
+        'insecticide as per label instructions if needed.',
+    'Plant disease-free setts of resistant varieties, and keep the '
+        'field and its borders free of weeds and grasses.',
+    'یہ وائرس ہے — اس کا کوئی علاج نہیں۔ متاثرہ پودے ہٹا کر تلف کریں '
+        'اور تیلے (اس کو پھیلانے والے کیڑے) کو ضرورت پڑے تو ہدایات کے '
+        'مطابق کیڑے مار دوا سے قابو کریں۔',
+    'مزاحم اقسام کے بیماری سے پاک سم لگائیں اور کھیت اور اس کے کناروں '
+        'کو جڑی بوٹیوں اور گھاس سے صاف رکھیں۔',
+  ),
+  'Sugarcane___Yellow_leaf': Advice(
+    'This yellowing is caused by a virus spread by aphids - there is '
+        'no cure in the standing crop. Remove badly infected stools and '
+        'control aphids as per label instructions.',
+    'Always plant certified disease-free (tissue-culture) seed cane, '
+        'and control aphids early in the season.',
+    'یہ پیلاہٹ تیلے سے پھیلنے والے وائرس کی وجہ سے ہے — کھڑی فصل میں '
+        'اس کا کوئی علاج نہیں۔ زیادہ متاثرہ جڑیں ہٹائیں اور تیلے کو '
+        'ہدایات کے مطابق قابو کریں۔',
+    'ہمیشہ تصدیق شدہ بیماری سے پاک (ٹشو کلچر) بیج گنا لگائیں اور موسم '
+        'کے شروع میں ہی تیلے کو قابو کریں۔',
+  ),
+  'Rice___healthy': Advice(
+    'No treatment needed. Your rice looks healthy.',
+    'Keep the recommended water level and check the leaves every week.',
+    'کسی علاج کی ضرورت نہیں۔ آپ کے چاول صحت مند لگ رہے ہیں۔',
+    'تجویز کردہ پانی کی سطح رکھیں اور ہر ہفتے پتے چیک کریں۔',
+  ),
+  'Rice___Bacterial_leaf_blight': Advice(
+    'Drain the field for a few days and stop nitrogen for now. Apply a '
+        'copper-based bactericide (or streptocycline) as per label '
+        'instructions.',
+    'Use resistant varieties and clean seed, give balanced fertilizer '
+        '(too much nitrogen makes it worse), and keep the field and '
+        'bunds clean.',
+    'کھیت سے چند دن پانی نکال دیں اور فی الحال نائٹروجن بند کریں۔ '
+        'تانبے والی بیکٹیریا مار دوا (یا اسٹریپٹوسائیکلین) ہدایات کے '
+        'مطابق استعمال کریں۔',
+    'مزاحم اقسام اور صاف بیج استعمال کریں، متوازن کھاد دیں (زیادہ '
+        'نائٹروجن بیماری بڑھا دیتی ہے) اور کھیت اور مینڈیں صاف رکھیں۔',
+  ),
+  'Rice___Brown_spot': Advice(
+    'Apply mancozeb fungicide as per label instructions. This disease '
+        'often means the soil is hungry - plan a balanced fertilizer '
+        'dose (especially potash) for the crop.',
+    'Use healthy treated seed, give balanced fertilizer including '
+        'potash and silicon, and avoid water stress.',
+    'مینکوزیب فنگس مار دوا ہدایات کے مطابق استعمال کریں۔ یہ بیماری '
+        'اکثر مٹی کی کمزوری کی نشانی ہے — فصل کے لیے متوازن کھاد (خاص '
+        'طور پر پوٹاش) کا بندوبست کریں۔',
+    'صحت مند علاج شدہ بیج استعمال کریں، پوٹاش اور سلیکون سمیت متوازن '
+        'کھاد دیں اور پانی کی کمی نہ ہونے دیں۔',
+  ),
+  'Rice___Leaf_blast': Advice(
+    'Apply tricyclazole or isoprothiolane fungicide as per label '
+        'instructions, as soon as the spindle-shaped spots appear. '
+        'Reduce nitrogen for now.',
+    'Grow resistant varieties, treat seed before sowing, avoid too '
+        'much nitrogen, and keep a steady water level in the field.',
+    'جیسے ہی تکلی نما دھبے نظر آئیں، ٹرائی سائیکلازول یا '
+        'آئسوپروتھیولین فنگس مار دوا ہدایات کے مطابق استعمال کریں۔ فی '
+        'الحال نائٹروجن کم کر دیں۔',
+    'مزاحم اقسام اگائیں، بوائی سے پہلے بیج کا علاج کریں، نائٹروجن '
+        'زیادہ نہ دیں اور کھیت میں پانی کی سطح یکساں رکھیں۔',
+  ),
+  'Rice___Leaf_scald': Advice(
+    'Apply mancozeb or a copper fungicide as per label instructions '
+        'and avoid excess nitrogen.',
+    'Use clean seed, keep proper spacing, and give balanced '
+        'fertilizer.',
+    'مینکوزیب یا تانبے والی فنگس مار دوا ہدایات کے مطابق استعمال '
+        'کریں اور نائٹروجن زیادہ نہ دیں۔',
+    'صاف بیج استعمال کریں، مناسب فاصلہ رکھیں اور متوازن کھاد دیں۔',
+  ),
+  'Rice___Sheath_blight': Advice(
+    'Apply validamycin or hexaconazole fungicide as per label '
+        'instructions, spraying low near the water line where the '
+        'disease starts.',
+    'Keep wider spacing, avoid too much nitrogen, remove floating '
+        'infected debris, and drain the field briefly if the disease '
+        'is spreading.',
+    'ویلیدامائیسن یا ہیکساکونازول فنگس مار دوا ہدایات کے مطابق '
+        'استعمال کریں — سپرے نیچے پانی کی لائن کے قریب کریں جہاں سے '
+        'بیماری شروع ہوتی ہے۔',
+    'فاصلہ زیادہ رکھیں، نائٹروجن زیادہ نہ دیں، تیرتی ہوئی متاثرہ '
+        'باقیات ہٹائیں اور بیماری پھیل رہی ہو تو کھیت سے تھوڑی دیر پانی '
+        'نکال دیں۔',
+  ),
+  'Cotton___healthy': Advice(
+    'No treatment needed. Your cotton looks healthy.',
+    'Keep normal watering and check the leaves every week, especially '
+        'the underside for whiteflies.',
+    'کسی علاج کی ضرورت نہیں۔ آپ کی کپاس صحت مند لگ رہی ہے۔',
+    'معمول کے مطابق پانی دیں اور ہر ہفتے پتے چیک کریں، خاص طور پر '
+        'نیچے کی طرف سفید مکھی کے لیے۔',
+  ),
+  'Cotton___Bacterial_blight': Advice(
+    'Apply a copper-based bactericide as per label instructions. '
+        'Remove badly infected leaves and do not work in a wet field - '
+        'the bacteria spread with water and hands.',
+    'Use acid-delinted, fungicide-treated seed of resistant '
+        'varieties, rotate crops, and destroy crop residue after '
+        'picking.',
+    'تانبے والی بیکٹیریا مار دوا ہدایات کے مطابق استعمال کریں۔ زیادہ '
+        'متاثرہ پتے ہٹائیں اور گیلے کھیت میں کام نہ کریں — بیکٹیریا '
+        'پانی اور ہاتھوں سے پھیلتے ہیں۔',
+    'مزاحم اقسام کا تیزاب سے صاف شدہ، دوا لگا ہوا بیج استعمال کریں، '
+        'فصلیں تبدیل کریں اور چنائی کے بعد فصل کی باقیات تلف کریں۔',
+  ),
+  'Cotton___Leaf_curl_virus': Advice(
+    'There is no cure for this virus. Control its carrier, the '
+        'whitefly: use yellow sticky traps and, if the attack is '
+        'heavy, an insecticide as per label instructions. Remove '
+        'badly infected plants early.',
+    'Grow resistant varieties (very important for this virus in '
+        'Pakistan), sow early, keep the field free of weeds that host '
+        'whiteflies, and never keep a ratoon (old) cotton crop.',
+    'اس وائرس کا کوئی علاج نہیں۔ اس کو پھیلانے والی سفید مکھی کو '
+        'قابو کریں: پیلی چپکنے والی پٹیاں لگائیں اور حملہ زیادہ ہو تو '
+        'ہدایات کے مطابق کیڑے مار دوا استعمال کریں۔ زیادہ متاثرہ پودے '
+        'جلد ہٹا دیں۔',
+    'مزاحم اقسام اگائیں (پاکستان میں اس وائرس کے لیے یہ سب سے اہم '
+        'ہے)، جلدی بوائی کریں، کھیت کو سفید مکھی والی جڑی بوٹیوں سے '
+        'صاف رکھیں اور کبھی پرانی (رٹون) کپاس نہ رکھیں۔',
+  ),
+  'Cotton___Fusarium_wilt': Advice(
+    'There is no effective spray once the plant wilts. Remove and '
+        'destroy wilted plants, and avoid moving soil from this field '
+        'to other fields on tools or shoes.',
+    'Grow resistant varieties, rotate with non-host crops for a few '
+        'years, use treated seed, and keep potash balanced - it helps '
+        'the plant resist this fungus.',
+    'پودا مرجھا جائے تو کوئی سپرے مؤثر نہیں۔ مرجھائے ہوئے پودے ہٹا '
+        'کر تلف کریں اور اس کھیت کی مٹی اوزاروں یا جوتوں کے ساتھ دوسرے '
+        'کھیتوں میں نہ لے جائیں۔',
+    'مزاحم اقسام اگائیں، چند سال دوسری فصلیں اگائیں، علاج شدہ بیج '
+        'استعمال کریں اور پوٹاش متوازن رکھیں — یہ پودے کو اس فنگس سے '
+        'لڑنے میں مدد دیتی ہے۔',
+  ),
 };
 
-// Urdu names for all 12 classes - so a farmer who does not read English
+// Urdu names for all 32 classes - so a farmer who does not read English
 // can still read the result in Urdu mode. Key = exact label from labels.txt.
 const Map<String, String> kUrduLabels = {
   'Corn_(maize)___Common_rust_': 'مکئی — عام زنگ (رسٹ)',
@@ -193,6 +420,26 @@ const Map<String, String> kUrduLabels = {
   'Tomato___Leaf_Mold': 'ٹماٹر — پتوں کی پھپھوندی',
   'Tomato___Tomato_Yellow_Leaf_Curl_Virus': 'ٹماٹر — پیلے مڑے پتوں والا وائرس',
   'Tomato___healthy': 'ٹماٹر — صحت مند',
+  'Wheat___healthy': 'گندم — صحت مند',
+  'Wheat___Yellow_rust': 'گندم — پیلا زنگ (یلو رسٹ)',
+  'Wheat___Brown_rust': 'گندم — بھورا زنگ (براؤن رسٹ)',
+  'Wheat___Powdery_mildew': 'گندم — سفوفی پھپھوندی (پاؤڈری ملڈیو)',
+  'Wheat___Septoria_leaf_blotch': 'گندم — سیپٹوریا پتوں کے دھبے',
+  'Sugarcane___healthy': 'گنا — صحت مند',
+  'Sugarcane___Red_rot': 'گنا — سرخ سڑن (ریڈ راٹ)',
+  'Sugarcane___Rust': 'گنا — زنگ (رسٹ)',
+  'Sugarcane___Mosaic': 'گنا — موزیک وائرس',
+  'Sugarcane___Yellow_leaf': 'گنا — پیلے پتے',
+  'Rice___healthy': 'چاول — صحت مند',
+  'Rice___Bacterial_leaf_blight': 'چاول — بیکٹیریا والا پتوں کا جھلساؤ',
+  'Rice___Brown_spot': 'چاول — بھورے دھبے',
+  'Rice___Leaf_blast': 'چاول — پتوں کا بلاسٹ',
+  'Rice___Leaf_scald': 'چاول — پتوں کا جلنا (لیف اسکالڈ)',
+  'Rice___Sheath_blight': 'چاول — شیتھ بلائٹ',
+  'Cotton___healthy': 'کپاس — صحت مند',
+  'Cotton___Bacterial_blight': 'کپاس — بیکٹیریا والا جھلساؤ',
+  'Cotton___Leaf_curl_virus': 'کپاس — پتوں کے مڑنے والا وائرس (لیف کرل)',
+  'Cotton___Fusarium_wilt': 'کپاس — فیوزیریم مرجھاؤ',
 };
 
 String prettyLabel(String label) =>
@@ -298,8 +545,14 @@ class Classifier {
   Future<(String, double)> predict(File imageFile) async {
     final interpreter = _interpreter!;
     final bytes = await imageFile.readAsBytes();
-    img.Image? decoded = img.decodeImage(bytes);
-    if (decoded == null) throw Exception('Could not read the image.');
+    img.Image? rawDecoded = img.decodeImage(bytes);
+    if (rawDecoded == null) throw Exception('Could not read the image.');
+    // Camera photos are often SAVED sideways with a rotation flag in
+    // the file (the phone screen shows them upright, but the file is
+    // rotated). Bake that rotation into the pixels, otherwise the
+    // model sees a sideways leaf and answers wrong. Gallery photos
+    // have no rotation flag, so this changes nothing for them.
+    final decoded = img.bakeOrientation(rawDecoded);
     // Training also squashed photos straight to 224x224, so do the same.
     final resized = img.copyResize(decoded, width: kInputSize, height: kInputSize);
 
@@ -446,6 +699,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String _phone = '';
   int _diagCount = 0;
   bool? _online;
+  bool _scanning = false;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -457,6 +712,12 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _modelReady = true);
       syncPendingRecords(); // try to upload old records at startup
     });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProfile() async {
@@ -478,10 +739,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _pickAndDiagnose(ImageSource source) async {
     final picked = await _picker.pickImage(source: source, imageQuality: 90);
     if (picked == null) return;
-    final file = File(picked.path);
+    await _diagnose(File(picked.path));
+  }
+
+  /// Camera button: open the SCANNER-style camera (live preview with a
+  /// leaf frame and a moving scan line). If the scanner camera cannot
+  /// start on this phone, the scanner screen falls back by itself to
+  /// the normal camera, so this always ends with a photo or nothing.
+  Future<void> _openScanner() async {
+    final file = await Navigator.push<File>(
+      context,
+      MaterialPageRoute(builder: (_) => ScannerScreen(urdu: _urdu)),
+    );
+    if (file == null) return;
+    await _diagnose(file);
+  }
+
+  Future<void> _diagnose(File file) async {
+    final sw = Stopwatch()..start();
     setState(() {
       _image = file;
-      _resultText = _urdu ? 'جائزہ لیا جا رہا ہے…' : 'Analysing…';
+      _scanning = true;
+      _resultText = _urdu ? 'پتا اسکین ہو رہا ہے…' : 'Scanning leaf…';
       _advice = null;
     });
 
@@ -498,7 +777,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkOnline();
     _diagCount++;
 
+    // Keep the scanning animation on screen briefly, so the user can
+    // see the leaf is really being scanned.
+    final left = 1400 - sw.elapsedMilliseconds;
+    if (left > 0) await Future.delayed(Duration(milliseconds: left));
+    if (!mounted) return;
+
     setState(() {
+      _scanning = false;
       if (confidence < kConfidenceThreshold) {
         // Proposal 8.3: do not give a misleading answer.
         _resultText = _urdu
@@ -513,6 +799,18 @@ class _HomeScreenState extends State<HomeScreen> {
         _advice = adviceFor(label);
       }
     });
+  }
+
+  /// "Back - scan another leaf": clear the photo and result and go
+  /// back to the top of the home screen.
+  void _resetScan() {
+    setState(() {
+      _image = null;
+      _resultText = null;
+      _advice = null;
+    });
+    _scrollController.animateTo(0,
+        duration: const Duration(milliseconds: 400), curve: Curves.easeOut);
   }
 
   @override
@@ -580,6 +878,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: !_modelReady
             ? const Center(child: CircularProgressIndicator())
             : ListView(
+              controller: _scrollController,
               padding: const EdgeInsets.all(16),
               children: [
                 Card(
@@ -711,16 +1010,25 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (_image != null)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.file(_image!, height: 260, fit: BoxFit.cover),
+                    child: Stack(
+                      children: [
+                        Image.file(_image!,
+                            height: 260,
+                            width: double.infinity,
+                            fit: BoxFit.cover),
+                        if (_scanning)
+                          const Positioned.fill(child: ScanLineOverlay()),
+                      ],
+                    ),
                   ),
                 const SizedBox(height: 16),
                 Row(
                   children: [
                     Expanded(
                       child: FilledButton.icon(
-                        icon: const Icon(Icons.camera_alt),
-                        label: Text(_urdu ? 'کیمرہ' : 'Camera'),
-                        onPressed: () => _pickAndDiagnose(ImageSource.camera),
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: Text(_urdu ? 'اسکینر' : 'Scanner'),
+                        onPressed: _openScanner,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -755,6 +1063,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     ),
+                  ),
+                ],
+                if (_image != null && !_scanning) ...[
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.arrow_back),
+                    label: Text(_urdu
+                        ? 'واپس — ایک اور پتا اسکین کریں'
+                        : 'Back - scan another leaf'),
+                    onPressed: _resetScan,
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -976,7 +1294,7 @@ class _LoginScreenState extends State<LoginScreen> {
 // ---------------------------------------------------------------------------
 // AI ASSISTANT - offline chat help, built into the app (no internet, no
 // API key). It answers from the same advice knowledge as the diagnosis
-// screen: all 12 diseases (treatment + prevention), photo tips, low
+// screen: all 32 diseases (treatment + prevention), photo tips, low
 // confidence, watering, fertilizer and general prevention - in English
 // or Urdu. Viva point: the assistant works 100% offline, like the model.
 // ---------------------------------------------------------------------------
@@ -1091,17 +1409,57 @@ class _AssistantScreenState extends State<AssistantScreen> {
     if (has(['tomato', 'ٹماٹر', 'tamatar'])) crop = 'Tomato';
     if (has(['potato', 'آلو', 'aalu', 'aloo'])) crop = 'Potato';
     if (has(['corn', 'maize', 'مکئی', 'makai'])) crop = 'Corn_(maize)';
+    if (has(['wheat', 'گندم', 'gandum'])) crop = 'Wheat';
+    if (has(['sugarcane', 'sugar cane', 'گنا', 'ganna'])) crop = 'Sugarcane';
+    if (has(['rice', 'چاول', 'chawal', 'دھان'])) crop = 'Rice';
+    if (has(['cotton', 'کپاس', 'kapas'])) crop = 'Cotton';
     String? disease;
     if (has(['healthy', 'صحت مند', 'sehat'])) disease = 'healthy';
     if (has(['early', 'ابتدائی'])) disease = 'Early_blight';
     if (has(['late', 'دیر', 'پچھیتا'])) disease = 'Late_blight';
-    if (has(['rust', 'زنگ'])) disease = 'Common_rust_';
     if (has(['northern', 'شمالی'])) disease = 'Northern_Leaf_Blight';
-    if (has(['bacterial', 'bacteria', 'بیکٹیریا', 'spot', 'دھبے'])) {
-      disease = 'Bacterial_spot';
+    if (has(['septoria', 'سیپٹوریا'])) disease = 'Septoria_leaf_blotch';
+    if (has(['powdery', 'mildew', 'سفوفی'])) disease = 'Powdery_mildew';
+    if (has(['red rot', 'سرخ سڑن'])) disease = 'Red_rot';
+    if (has(['mosaic', 'موزیک'])) disease = 'Mosaic';
+    if (has(['sheath', 'شیتھ'])) disease = 'Sheath_blight';
+    if (has(['scald', 'اسکالڈ'])) disease = 'Leaf_scald';
+    if (has(['blast', 'بلاسٹ'])) disease = 'Leaf_blast';
+    if (has(['brown spot', 'بھورے دھبے'])) disease = 'Brown_spot';
+    if (has(['fusarium', 'wilt', 'فیوزیریم', 'مرجھاؤ'])) {
+      disease = 'Fusarium_wilt';
     }
+    if (has(['yellow leaf', 'پیلے پتے']) && crop == 'Sugarcane') {
+      disease = 'Yellow_leaf';
+    }
+    if (has(['rust', 'زنگ'])) {
+      if (has(['yellow', 'stripe', 'پیلا'])) {
+        disease = 'Yellow_rust';
+      } else if (has(['brown', 'بھورا'])) {
+        disease = 'Brown_rust';
+      } else if (crop == 'Sugarcane') {
+        disease = 'Rust';
+      } else if (crop == 'Wheat') {
+        disease = 'Yellow_rust';
+      } else {
+        disease = 'Common_rust_';
+      }
+    }
+    if (has(['bacterial', 'bacteria', 'بیکٹیریا'])) {
+      if (crop == 'Rice') {
+        disease = 'Bacterial_leaf_blight';
+      } else if (crop == 'Cotton') {
+        disease = 'Bacterial_blight';
+      } else {
+        disease = 'Bacterial_spot';
+      }
+    }
+    if (has(['spot', 'دھبے']) && disease == null) disease = 'Bacterial_spot';
     if (has(['mold', 'پھپھوندی', 'phaphundi'])) disease = 'Leaf_Mold';
-    if (has(['yellow', 'curl', 'virus', 'پیلے', 'وائرس', 'مڑے'])) {
+    if (crop == 'Cotton' && has(['curl', 'virus', 'وائرس', 'مڑے'])) {
+      disease = 'Leaf_curl_virus';
+    } else if (disease == null &&
+        has(['yellow', 'curl', 'virus', 'پیلے', 'وائرس', 'مڑے'])) {
       disease = 'Tomato_Yellow_Leaf_Curl_Virus';
       crop = 'Tomato';
     }
@@ -1187,11 +1545,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
       if (last != null) (_u ? 'میری آخری بیماری کا علاج' : 'Treatment of my last result'),
       _u ? 'ٹماٹر ابتدائی جھلساؤ کا علاج' : 'Tomato early blight treatment',
       _u ? 'آلو دیر والا جھلساؤ' : 'Potato late blight',
+      _u ? 'گندم پیلا زنگ' : 'Wheat yellow rust',
+      _u ? 'کپاس لیف کرل وائرس' : 'Cotton leaf curl virus',
       _u ? 'اچھی تصویر کیسے لوں؟' : 'How to take a good photo?',
       _u ? 'بیماری سے بچاؤ کیسے ہو؟' : 'How to prevent disease?',
     ];
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () => Navigator.pop(context),
+        ),
         title: Text(_u ? 'AI مددگار' : 'AI Assistant'),
         backgroundColor: Colors.green.shade700,
         foregroundColor: Colors.white,
@@ -1324,6 +1689,11 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () => Navigator.pop(context),
+        ),
         title: Text(urdu ? 'میری پروفائل' : 'My Profile'),
         backgroundColor: Colors.green.shade700,
         foregroundColor: Colors.white,
@@ -1450,6 +1820,12 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.arrow_back),
+                  label: Text(urdu ? 'واپس' : 'Back'),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                const SizedBox(height: 8),
                 TextButton.icon(
                   icon: const Icon(Icons.logout, color: Colors.red),
                   label: Text(urdu ? 'لاگ آؤٹ' : 'Logout',
@@ -1480,7 +1856,16 @@ class HistoryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(urdu ? 'پچھلی تشخیص' : 'History'), backgroundColor: Colors.green.shade700, foregroundColor: Colors.white),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(urdu ? 'پچھلی تشخیص' : 'History'),
+        backgroundColor: Colors.green.shade700,
+        foregroundColor: Colors.white,
+      ),
       body: FutureBuilder<List<Map<String, Object?>>>(
         future: HistoryDb.all(),
         builder: (context, snap) {
@@ -1507,4 +1892,343 @@ class HistoryScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// SCAN LINE OVERLAY - a green scanning line that sweeps over the leaf
+// photo while the model is working, so scanning FEELS like scanning.
+// ---------------------------------------------------------------------------
+class ScanLineOverlay extends StatefulWidget {
+  const ScanLineOverlay({super.key});
+  @override
+  State<ScanLineOverlay> createState() => _ScanLineOverlayState();
+}
+
+class _ScanLineOverlayState extends State<ScanLineOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1300))
+    ..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) => CustomPaint(
+        painter: _ScanLinePainter(_c.value),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+class _ScanLinePainter extends CustomPainter {
+  final double t;
+  const _ScanLinePainter(this.t);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = t * size.height;
+    final glow = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.greenAccent.withOpacity(0),
+          Colors.greenAccent.withOpacity(0.35),
+          Colors.greenAccent.withOpacity(0),
+        ],
+      ).createShader(Rect.fromLTWH(0, y - 26, size.width, 52));
+    canvas.drawRect(Rect.fromLTWH(0, y - 26, size.width, 52), glow);
+    final line = Paint()
+      ..color = Colors.greenAccent
+      ..strokeWidth = 3;
+    canvas.drawLine(Offset(0, y), Offset(size.width, y), line);
+  }
+
+  @override
+  bool shouldRepaint(_ScanLinePainter old) => old.t != t;
+}
+
+// ---------------------------------------------------------------------------
+// SCANNER CAMERA - a scanner-style camera: live preview with a leaf
+// frame, corner brackets and a moving scan line, instead of the plain
+// camera app. If the scanner camera cannot start on a phone (camera
+// permission not given yet, no camera, any error), it quietly falls
+// back to the normal camera (image_picker), so the user always gets
+// a working camera.
+// ---------------------------------------------------------------------------
+class ScannerScreen extends StatefulWidget {
+  final bool urdu;
+  const ScannerScreen({super.key, this.urdu = false});
+  @override
+  State<ScannerScreen> createState() => _ScannerScreenState();
+}
+
+class _ScannerScreenState extends State<ScannerScreen>
+    with SingleTickerProviderStateMixin {
+  cam.CameraController? _controller;
+  bool _ready = false;
+  bool _flashOn = false;
+  bool _busy = false;
+  late final AnimationController _anim = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1600))
+    ..repeat(reverse: true);
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final cams = await cam.availableCameras();
+      if (cams.isEmpty) throw Exception('no camera');
+      final back = cams.firstWhere(
+          (c) => c.lensDirection == cam.CameraLensDirection.back,
+          orElse: () => cams.first);
+      final ctrl = cam.CameraController(back, cam.ResolutionPreset.high,
+          enableAudio: false);
+      await ctrl.initialize();
+      if (!mounted) {
+        await ctrl.dispose();
+        return;
+      }
+      _controller = ctrl;
+      setState(() => _ready = true);
+    } catch (_) {
+      _fallback();
+    }
+  }
+
+  Future<void> _fallback() async {
+    if (!mounted) return;
+    final picked = await ImagePicker()
+        .pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (!mounted) return;
+    Navigator.pop(context, picked == null ? null : File(picked.path));
+  }
+
+  Future<void> _capture() async {
+    final ctrl = _controller;
+    if (ctrl == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final shot = await ctrl.takePicture();
+      if (!mounted) return;
+      Navigator.pop(context, await _framedPhoto(File(shot.path)));
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// The preview frame shows only the middle of the camera picture,
+  /// but takePicture() saves the WHOLE frame (with all the background
+  /// around the leaf). Crop the centre square - the part the user
+  /// actually framed - and fix the file's rotation flag, so the model
+  /// sees the leaf big and upright, like the training photos.
+  Future<File> _framedPhoto(File raw) async {
+    try {
+      final bytes = await raw.readAsBytes();
+      final dec = img.decodeImage(bytes);
+      if (dec == null) return raw;
+      final upright = img.bakeOrientation(dec);
+      final side =
+          upright.width < upright.height ? upright.width : upright.height;
+      final cropped = img.copyCrop(upright,
+          x: (upright.width - side) ~/ 2,
+          y: (upright.height - side) ~/ 2,
+          width: side,
+          height: side);
+      final out = File('${raw.path}_framed.jpg');
+      await out.writeAsBytes(img.encodeJpg(cropped, quality: 92));
+      return out;
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  Future<void> _toggleFlash() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    try {
+      await ctrl
+          .setFlashMode(_flashOn ? cam.FlashMode.off : cam.FlashMode.torch);
+      setState(() => _flashOn = !_flashOn);
+    } catch (_) {}
+  }
+
+  Future<void> _gallery() async {
+    final picked = await ImagePicker()
+        .pickImage(source: ImageSource.gallery, imageQuality: 90);
+    if (!mounted) return;
+    Navigator.pop(context, picked == null ? null : File(picked.path));
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(widget.urdu ? 'پتا اسکینر' : 'Leaf Scanner'),
+      ),
+      body: !_ready
+          ? const Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent))
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                cam.CameraPreview(_controller!),
+                AnimatedBuilder(
+                  animation: _anim,
+                  builder: (_, __) => CustomPaint(
+                    painter: _ScannerFramePainter(_anim.value),
+                    size: Size.infinite,
+                  ),
+                ),
+                Positioned(
+                  top: 18,
+                  left: 24,
+                  right: 24,
+                  child: Text(
+                    widget.urdu
+                        ? 'ایک پتا فریم کے اندر رکھیں'
+                        : 'Place one leaf inside the frame',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 6)]),
+                  ),
+                ),
+                Positioned(
+                  bottom: 28,
+                  left: 0,
+                  right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      IconButton(
+                        iconSize: 30,
+                        color: Colors.white,
+                        icon: const Icon(Icons.photo_library),
+                        onPressed: _gallery,
+                      ),
+                      GestureDetector(
+                        onTap: _capture,
+                        child: Container(
+                          width: 74,
+                          height: 74,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border:
+                                Border.all(color: Colors.greenAccent, width: 4),
+                            color: Colors.white24,
+                          ),
+                          child: _busy
+                              ? const Padding(
+                                  padding: EdgeInsets.all(20),
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white),
+                                )
+                              : const Icon(Icons.camera_alt,
+                                  color: Colors.white, size: 34),
+                        ),
+                      ),
+                      IconButton(
+                        iconSize: 30,
+                        color: _flashOn ? Colors.yellow : Colors.white,
+                        icon: Icon(_flashOn ? Icons.flash_on : Icons.flash_off),
+                        onPressed: _toggleFlash,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _ScannerFramePainter extends CustomPainter {
+  final double t;
+  const _ScannerFramePainter(this.t);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width * 0.78;
+    final h = w; // square frame
+    final left = (size.width - w) / 2;
+    final top = (size.height - h) / 2 - 30;
+    final rect = Rect.fromLTWH(left, top, w, h);
+
+    // Darken everything outside the frame.
+    final dim = Paint()..color = Colors.black.withOpacity(0.45);
+    final path = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(18)));
+    path.fillType = PathFillType.evenOdd;
+    canvas.drawPath(path, dim);
+
+    // Green corner brackets.
+    final corner = Paint()
+      ..color = Colors.greenAccent
+      ..strokeWidth = 5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    const len = 34.0;
+    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(len, 0), corner);
+    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(0, len), corner);
+    canvas.drawLine(rect.topRight, rect.topRight + const Offset(-len, 0), corner);
+    canvas.drawLine(rect.topRight, rect.topRight + const Offset(0, len), corner);
+    canvas.drawLine(
+        rect.bottomLeft, rect.bottomLeft + const Offset(len, 0), corner);
+    canvas.drawLine(
+        rect.bottomLeft, rect.bottomLeft + const Offset(0, -len), corner);
+    canvas.drawLine(
+        rect.bottomRight, rect.bottomRight + const Offset(-len, 0), corner);
+    canvas.drawLine(
+        rect.bottomRight, rect.bottomRight + const Offset(0, -len), corner);
+
+    // Moving scan line inside the frame.
+    final y = top + t * h;
+    final glow = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.greenAccent.withOpacity(0),
+          Colors.greenAccent.withOpacity(0.30),
+          Colors.greenAccent.withOpacity(0),
+        ],
+      ).createShader(Rect.fromLTWH(left, y - 22, w, 44));
+    canvas.drawRect(Rect.fromLTWH(left, y - 22, w, 44), glow);
+    final line = Paint()
+      ..color = Colors.greenAccent
+      ..strokeWidth = 3;
+    canvas.drawLine(Offset(left, y), Offset(left + w, y), line);
+  }
+
+  @override
+  bool shouldRepaint(_ScannerFramePainter old) => old.t != t;
 }
