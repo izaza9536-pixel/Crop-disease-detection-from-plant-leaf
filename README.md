@@ -130,15 +130,9 @@ flutter run
 └── ANDROID_PERMISSIONS.txt  # Extra manifest steps for the voice assistant
 ```
 
-## Team
+## Project
 
-| Member | Roll No. |
-|---|---|
-| Izaz Ahmad | 231005345 |
-| Asif Malak | 231016232 |
-| Muhammad Zaheer Uddin Babar | 231012246 |
-
-**Supervisor:** Mam Kiran Falak
+**Supervisor:** Sir Yasir Shah
 **Department:** Computer Science, Abdul Wali Khan University Mardan (AWKUM), Garden Campus
 **Session:** 2026–2027
 
