@@ -132,7 +132,6 @@ flutter run
 
 ## Project
 
-**Supervisor:** Sir Yasir Shah
 **Department:** Computer Science, Abdul Wali Khan University Mardan (AWKUM), Garden Campus
 **Session:** 2026–2027
 
