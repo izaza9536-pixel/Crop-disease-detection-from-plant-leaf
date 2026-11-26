@@ -21,7 +21,7 @@
 
 ## About
 
-**CropCare AI** is a BS Computer Science Final Year Project (FYP) at **Abdul Wali Khan University Mardan (AWKUM), Garden Campus**. It helps farmers detect crop diseases early: the user takes a photo of a leaf, and a Convolutional Neural Network (CNN) running **entirely on the phone** identifies the disease and shows treatment and prevention advice.
+**CropCare AI** is a personal project, designed and built by **Izaz Ahmad**. It helps farmers detect crop diseases early: the user takes a photo of a leaf, and a Convolutional Neural Network (CNN) running **entirely on the phone** identifies the disease and shows treatment and prevention advice.
 
 No internet is needed for diagnosis — an important requirement for farms and villages with weak or no signal. When internet is available, saved records can sync to a backend server.
 
@@ -86,7 +86,7 @@ No internet is needed for diagnosis — an important requirement for farms and v
 | Training | Python, Kaggle notebooks (GPU) |
 | Local storage | SQLite (sqflite) |
 | Voice | speech_to_text, flutter_tts |
-| Backend (sync) | FastAPI + PostgreSQL (proposal design) |
+| Backend (sync) | FastAPI + PostgreSQL (planned) |
 
 ## Getting Started
 
@@ -130,11 +130,6 @@ flutter run
 └── ANDROID_PERMISSIONS.txt  # Extra manifest steps for the voice assistant
 ```
 
-## Project
-
-**Department:** Computer Science, Abdul Wali Khan University Mardan (AWKUM), Garden Campus
-**Session:** 2026–2027
-
 ## Future Work
 
 - Field testing with real farm photos (outside PlantVillage lab conditions) and fine-tuning on field data
@@ -144,4 +139,4 @@ flutter run
 
 ## License
 
-This project is released under the [MIT License](LICENSE) — for academic and learning use.
+This project is released under the [MIT License](LICENSE) — for learning and personal use.
