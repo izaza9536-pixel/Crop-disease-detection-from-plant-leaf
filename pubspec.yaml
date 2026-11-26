@@ -1,5 +1,5 @@
 name: crop_disease_app
-description: "CropCare AI - Crop Disease Detection FYP app (offline TFLite inference)"
+description: "CropCare AI - Crop disease detection app with offline TFLite inference, by Izaz Ahmad"
 publish_to: 'none'
 version: 1.0.0+1
 
