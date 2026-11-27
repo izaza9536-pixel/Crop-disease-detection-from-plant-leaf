@@ -26,6 +26,7 @@
 /// Packages (see pubspec.yaml): image_picker, tflite_flutter, image,
 /// sqflite, path, http.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -51,7 +52,18 @@ const int kInputSize = 224;                 // MobileNetV3 input size
 const double kConfidenceThreshold = 0.60;   // below this -> "uncertain" (8.3)
 const String kBackendBaseUrl = 'http://10.0.2.2:8000'; // emulator -> PC
 // For a real phone on the same Wi-Fi use your PC's IP, e.g. 192.168.1.10:8000
-const int kModelVersion = 2;
+const int kModelVersion = 3;
+
+// GATE MODEL (v4) - a small 3-class model that runs BEFORE the disease
+// model: known_leaf (one of our 7 crops) / not_leaf / other_leaf (a
+// plant that is not in our system). Trained 2026-11-26: 93.59% on
+// 2,700 held-out photos; not-leaf photos wrongly accepted: 0.00%.
+const String kGateAsset = 'assets/gate_model.tflite';
+const String kGateLabelsAsset = 'assets/gate_labels.txt';
+// From the gate run's threshold table: at 0.5 the other-plant leaves
+// wrongly accepted are 7.11% and not-leaf 0.00%, while real leaves
+// wrongly refused stay at their lowest (12.00%).
+const double kGateKnownThreshold = 0.5;
 
 // ---------------------------------------------------------------------------
 // TREATMENT ADVICE (Section 6.2) - English + Urdu, all 32 classes.
@@ -541,27 +553,17 @@ class Classifier {
     labels = raw.split('\n').where((e) => e.trim().isNotEmpty).toList();
   }
 
-  /// Returns (label, confidence 0..1) for the best class.
-  Future<(String, double)> predict(File imageFile) async {
+  /// Runs the model once on an already-resized 224x224 image and
+  /// returns the probability of every class.
+  List<double> _probsFor(img.Image resized) {
     final interpreter = _interpreter!;
-    final bytes = await imageFile.readAsBytes();
-    img.Image? rawDecoded = img.decodeImage(bytes);
-    if (rawDecoded == null) throw Exception('Could not read the image.');
-    // Camera photos are often SAVED sideways with a rotation flag in
-    // the file (the phone screen shows them upright, but the file is
-    // rotated). Bake that rotation into the pixels, otherwise the
-    // model sees a sideways leaf and answers wrong. Gallery photos
-    // have no rotation flag, so this changes nothing for them.
-    final decoded = img.bakeOrientation(rawDecoded);
-    // Training also squashed photos straight to 224x224, so do the same.
-    final resized = img.copyResize(decoded, width: kInputSize, height: kInputSize);
-
     final inputTensor = interpreter.getInputTensor(0);
     final outputTensor = interpreter.getOutputTensor(0);
 
     if (inputTensor.type == TensorType.uint8) {
       // ---- INT8 model: fill the input with raw 0-255 pixels, quantized
-      // with the input tensor's own scale / zero-point.
+      // with the input tensor's own scale / zero-point; the output is
+      // converted back with the output tensor's scale / zero-point.
       final inParams = inputTensor.params;
       final input = Uint8List(kInputSize * kInputSize * 3);
       int i = 0;
@@ -578,16 +580,8 @@ class Classifier {
       interpreter.invoke();
       final outRaw = outputTensor.data; // Uint8List, one byte per class
       final outParams = outputTensor.params;
-      int best = 0;
-      double bestProb = -1;
-      for (int c = 0; c < labels.length; c++) {
-        final prob = (outRaw[c] - outParams.zeroPoint) * outParams.scale;
-        if (prob > bestProb) {
-          bestProb = prob;
-          best = c;
-        }
-      }
-      return (labels[best], bestProb);
+      return List<double>.generate(labels.length,
+          (c) => (outRaw[c] - outParams.zeroPoint) * outParams.scale);
     } else {
       // ---- FLOAT model (float16 file): raw 0-255 float pixels in,
       // probabilities out. (No [-1, 1] scaling - it is inside the model.)
@@ -606,12 +600,202 @@ class Classifier {
       final outBytes = outputTensor.data;
       final outFloats = outBytes.buffer
           .asFloat32List(outBytes.offsetInBytes, labels.length);
-      int best = 0;
-      for (int c = 1; c < labels.length; c++) {
-        if (outFloats[c] > outFloats[best]) best = c;
-      }
-      return (labels[best], outFloats[best]);
+      return List<double>.generate(labels.length, (c) => outFloats[c]);
     }
+  }
+
+  /// Returns (label, confidence 0..1) for the best class.
+  ///
+  /// v4 ANGLE FIX: the photo is tested at 4 rotations (0, 90, 180, 270
+  /// degrees) and the probabilities are averaged, so a leaf photo
+  /// taken at any angle still gets recognised. (Rotating the small
+  /// 224x224 image is exact and fast.)
+  Future<(String, double)> predict(File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    img.Image? rawDecoded = img.decodeImage(bytes);
+    if (rawDecoded == null) throw Exception('Could not read the image.');
+    // Camera photos are often SAVED sideways with a rotation flag in
+    // the file (the phone screen shows them upright, but the file is
+    // rotated). Bake that rotation into the pixels, otherwise the
+    // model sees a sideways leaf and answers wrong. Gallery photos
+    // have no rotation flag, so this changes nothing for them.
+    final decoded = img.bakeOrientation(rawDecoded);
+    // Training also squashed photos straight to 224x224, so do the same.
+    final resized =
+        img.copyResize(decoded, width: kInputSize, height: kInputSize);
+
+    final avg = List<double>.filled(labels.length, 0);
+    for (final angle in [0.0, 90.0, 180.0, 270.0]) {
+      final view = angle == 0 ? resized : img.copyRotate(resized, angle: angle);
+      final probs = _probsFor(view);
+      for (int c = 0; c < labels.length; c++) {
+        avg[c] += probs[c] / 4;
+      }
+    }
+    int best = 0;
+    for (int c = 1; c < labels.length; c++) {
+      if (avg[c] > avg[best]) best = c;
+    }
+    return (labels[best], avg[best]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GATE CLASSIFIER (v4) - runs BEFORE the disease model, on BOTH the
+// scanner and the gallery paths (they share _diagnose):
+//   known_leaf -> one of our 7 crops: the disease model may run.
+//   not_leaf   -> not a leaf at all: refuse politely.
+//   other_leaf -> a plant that is not in our system: refuse honestly
+//                 ("no answer") instead of inventing a disease.
+// The gate model also takes raw 0-255 pixels (preprocessing inside).
+// ---------------------------------------------------------------------------
+class GateClassifier {
+  Interpreter? _interpreter;
+  late List<String> labels;
+
+  Future<void> load() async {
+    _interpreter = await Interpreter.fromAsset(kGateAsset);
+    final raw = await rootBundle.loadString(kGateLabelsAsset);
+    labels = raw.split('\n').where((e) => e.trim().isNotEmpty).toList();
+  }
+
+  /// Probabilities for an image of any size (resized here to 224x224).
+  List<double> probsForImage(img.Image image) {
+    final resized =
+        img.copyResize(image, width: kInputSize, height: kInputSize);
+    return _probs224(resized);
+  }
+
+  /// Probabilities for an image that is already 224x224.
+  List<double> _probs224(img.Image resized) {
+    final interpreter = _interpreter!;
+    final inputTensor = interpreter.getInputTensor(0);
+    final outputTensor = interpreter.getOutputTensor(0);
+
+    if (inputTensor.type == TensorType.uint8) {
+      final inParams = inputTensor.params;
+      final input = Uint8List(kInputSize * kInputSize * 3);
+      int i = 0;
+      for (int y = 0; y < kInputSize; y++) {
+        for (int x = 0; x < kInputSize; x++) {
+          final px = resized.getPixel(x, y);
+          for (final v in [px.r, px.g, px.b]) {
+            int q = (v / inParams.scale + inParams.zeroPoint).round();
+            input[i++] = q.clamp(0, 255);
+          }
+        }
+      }
+      inputTensor.data = input;
+      interpreter.invoke();
+      final outRaw = outputTensor.data;
+      final outParams = outputTensor.params;
+      return List<double>.generate(labels.length,
+          (c) => (outRaw[c] - outParams.zeroPoint) * outParams.scale);
+    } else {
+      final input = Float32List(kInputSize * kInputSize * 3);
+      int i = 0;
+      for (int y = 0; y < kInputSize; y++) {
+        for (int x = 0; x < kInputSize; x++) {
+          final px = resized.getPixel(x, y);
+          input[i++] = px.r.toDouble();
+          input[i++] = px.g.toDouble();
+          input[i++] = px.b.toDouble();
+        }
+      }
+      inputTensor.data = input.buffer.asUint8List();
+      interpreter.invoke();
+      final outBytes = outputTensor.data;
+      final outFloats = outBytes.buffer
+          .asFloat32List(outBytes.offsetInBytes, labels.length);
+      return List<double>.generate(labels.length, (c) => outFloats[c]);
+    }
+  }
+
+  (String, double) _best(List<double> probs) {
+    int best = 0;
+    for (int c = 1; c < labels.length; c++) {
+      if (probs[c] > probs[best]) best = c;
+    }
+    return (labels[best], probs[best]);
+  }
+
+  /// Gate check for a photo file (the scanner and gallery paths).
+  /// Like the disease model, the gate averages its reading over 4
+  /// rotations, so a sideways leaf photo is not refused by mistake
+  /// (found in testing: a 90-degree rotated corn leaf was refused
+  /// without this, and passes with it).
+  Future<(String, double)> checkFile(File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    final rawDecoded = img.decodeImage(bytes);
+    if (rawDecoded == null) throw Exception('Could not read the image.');
+    final decoded = img.bakeOrientation(rawDecoded);
+    final resized =
+        img.copyResize(decoded, width: kInputSize, height: kInputSize);
+    final avg = List<double>.filled(labels.length, 0);
+    for (final angle in [0.0, 90.0, 180.0, 270.0]) {
+      final view =
+          angle == 0 ? resized : img.copyRotate(resized, angle: angle);
+      final probs = _probs224(view);
+      for (int c = 0; c < labels.length; c++) {
+        avg[c] += probs[c] / 4;
+      }
+    }
+    return _best(avg);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CAMERA FRAME -> IMAGE (v4, for the scanner's auto-capture watch)
+// Converts one live preview frame into a small square image the gate
+// model can read. Android frames are YUV420, iOS frames are BGRA.
+// Returns null if the frame cannot be read - the watch then simply
+// waits for the next frame.
+// ---------------------------------------------------------------------------
+img.Image? cameraFrameToImage(cam.CameraImage frame) {
+  try {
+    final w = frame.width;
+    final h = frame.height;
+    final out = img.Image(width: kInputSize, height: kInputSize);
+    if (frame.format.group == cam.ImageFormatGroup.bgra8888) {
+      final plane = frame.planes.first;
+      final rowStride = plane.bytesPerRow;
+      final pixelStride = plane.bytesPerPixel ?? 4;
+      for (int oy = 0; oy < kInputSize; oy++) {
+        final sy = (oy * h) ~/ kInputSize;
+        for (int ox = 0; ox < kInputSize; ox++) {
+          final sx = (ox * w) ~/ kInputSize;
+          final o = sy * rowStride + sx * pixelStride;
+          out.setPixelRgb(ox, oy, plane.bytes[o + 2], plane.bytes[o + 1],
+              plane.bytes[o]);
+        }
+      }
+      return out;
+    }
+    // YUV420 (Android): one full Y plane + two small colour planes.
+    final yPlane = frame.planes[0];
+    final uPlane = frame.planes[1];
+    final vPlane = frame.planes[2];
+    final uvPixelStride = uPlane.bytesPerPixel ?? 1;
+    for (int oy = 0; oy < kInputSize; oy++) {
+      final sy = (oy * h) ~/ kInputSize;
+      for (int ox = 0; ox < kInputSize; ox++) {
+        final sx = (ox * w) ~/ kInputSize;
+        final yv = yPlane.bytes[sy * yPlane.bytesPerRow + sx];
+        final uvIndex =
+            (sy ~/ 2) * uPlane.bytesPerRow + (sx ~/ 2) * uvPixelStride;
+        final u = uPlane.bytes[uvIndex];
+        final v = vPlane.bytes[uvIndex];
+        final r = (yv + 1.402 * (v - 128)).round().clamp(0, 255);
+        final g = (yv - 0.344136 * (u - 128) - 0.714136 * (v - 128))
+            .round()
+            .clamp(0, 255);
+        final b = (yv + 1.772 * (u - 128)).round().clamp(0, 255);
+        out.setPixelRgb(ox, oy, r, g, b);
+      }
+    }
+    return out;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -689,6 +873,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final Classifier _classifier = Classifier();
+  final GateClassifier _gate = GateClassifier();
+  bool _gateReady = false;
   final ImagePicker _picker = ImagePicker();
   bool _modelReady = false;
   bool _urdu = false;
@@ -711,6 +897,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _classifier.load().then((_) {
       setState(() => _modelReady = true);
       syncPendingRecords(); // try to upload old records at startup
+    });
+    _gate.load().then((_) {
+      _gateReady = true;
+    }).catchError((_) {
+      // No gate available - diagnosis simply runs as before.
+      _gateReady = false;
     });
   }
 
@@ -749,7 +941,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openScanner() async {
     final file = await Navigator.push<File>(
       context,
-      MaterialPageRoute(builder: (_) => ScannerScreen(urdu: _urdu)),
+      MaterialPageRoute(
+          builder: (_) =>
+              ScannerScreen(urdu: _urdu, gate: _gateReady ? _gate : null)),
     );
     if (file == null) return;
     await _diagnose(file);
@@ -763,6 +957,47 @@ class _HomeScreenState extends State<HomeScreen> {
       _resultText = _urdu ? 'پتا اسکین ہو رہا ہے…' : 'Scanning leaf…';
       _advice = null;
     });
+
+    // ---- GATE (v4): first check WHAT the photo shows. Only a known
+    // leaf goes to the disease model; anything else gets an honest
+    // message and is NOT saved as a diagnosis.
+    if (_gateReady) {
+      String gateLabel = 'known_leaf';
+      double gateConf = 1;
+      try {
+        final g = await _gate.checkFile(file);
+        gateLabel = g.$1;
+        gateConf = g.$2;
+      } catch (_) {
+        gateLabel = 'known_leaf'; // gate failed - do not block diagnosis
+      }
+      final refused = gateLabel == 'not_leaf' ||
+          gateLabel == 'other_leaf' ||
+          (gateLabel == 'known_leaf' && gateConf < kGateKnownThreshold);
+      if (refused) {
+        final left = 1400 - sw.elapsedMilliseconds;
+        if (left > 0) await Future.delayed(Duration(milliseconds: left));
+        if (!mounted) return;
+        setState(() {
+          _scanning = false;
+          _advice = null;
+          if (gateLabel == 'not_leaf') {
+            _resultText = _urdu
+                ? 'یہ پتا نہیں لگتا۔ براہ کرم کسی ایک پتے کی واضح تصویر لیں۔'
+                : 'This does not look like a leaf. Please take a clear photo of a single leaf.';
+          } else if (gateLabel == 'other_leaf') {
+            _resultText = _urdu
+                ? 'یہ پودا ہمارے سسٹم میں نہیں ہے۔ ہمارے سسٹم میں یہ فصلیں ہیں: ٹماٹر، آلو، مکئی، گندم، گنا، چاول، کپاس۔'
+                : 'This plant is not in our system. Our system knows: Tomato, Potato, Maize, Wheat, Sugarcane, Rice, Cotton.';
+          } else {
+            _resultText = _urdu
+                ? 'پتا تصویر میں واضح نہیں ہے۔ براہ کرم پتے کی قریب اور واضح تصویر لیں۔'
+                : 'The leaf is not clear in this photo. Please take a closer, clearer photo of a single leaf.';
+          }
+        });
+        return;
+      }
+    }
 
     final (label, confidence) = await _classifier.predict(file);
     _lastLabel = label;
@@ -1513,8 +1748,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
     if (has(['treatment', 'ilaj', 'علاج', 'spray', 'سپرے', 'dawa', 'دوا', 'bimari', 'بیماری', 'disease'])) {
       return urdu
-          ? 'علاج بیماری کے نام پر منحصر ہے۔ آپ فصل اور بیماری کا نام لکھیں — مثلاً "ٹماٹر لیف مولڈ" — یا پہلے Camera سے پتے کی تصویر لے کر تشخیص کر لیں، پھر علاج خود ہی اسی اسکرین پر آ جائے گا۔'
-          : 'Treatment depends on the exact disease. Write the crop and disease name - for example "tomato leaf mold" - or first take a leaf photo with Camera; the treatment appears on the result screen itself.';
+          ? 'علاج بیماری کے نام پر منحصر ہے۔ آپ فصل اور بیماری کا نام لکھیں — مثلاً "ٹماٹر لیف مولڈ" — یا پہلے Scanner سے پتے کی تصویر لے کر تشخیص کر لیں، پھر علاج خود ہی اسی اسکرین پر آ جائے گا۔'
+          : 'Treatment depends on the exact disease. Write the crop and disease name - for example "tomato leaf mold" - or first take a leaf photo with the Scanner; the treatment appears on the result screen itself.';
     }
     if (has(['history', 'تاریخ', 'ریکارڈ', 'record'])) {
       return urdu
@@ -1966,7 +2201,8 @@ class _ScanLinePainter extends CustomPainter {
 // ---------------------------------------------------------------------------
 class ScannerScreen extends StatefulWidget {
   final bool urdu;
-  const ScannerScreen({super.key, this.urdu = false});
+  final GateClassifier? gate;
+  const ScannerScreen({super.key, this.urdu = false, this.gate});
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
@@ -1977,6 +2213,12 @@ class _ScannerScreenState extends State<ScannerScreen>
   bool _ready = false;
   bool _flashOn = false;
   bool _busy = false;
+  // Auto-capture (v4): the gate watches the live preview.
+  bool _watching = false;
+  bool _frameBusy = false;
+  int _knownStreak = 0;
+  DateTime _lastFrameCheck = DateTime.fromMillisecondsSinceEpoch(0);
+  String _status = '';
   late final AnimationController _anim = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 1600))
     ..repeat(reverse: true);
@@ -1984,6 +2226,9 @@ class _ScannerScreenState extends State<ScannerScreen>
   @override
   void initState() {
     super.initState();
+    _status = widget.urdu
+        ? 'ایک پتا فریم کے اندر رکھیں'
+        : 'Place one leaf inside the frame';
     _init();
   }
 
@@ -2003,8 +2248,94 @@ class _ScannerScreenState extends State<ScannerScreen>
       }
       _controller = ctrl;
       setState(() => _ready = true);
+      _startWatch();
     } catch (_) {
       _fallback();
+    }
+  }
+
+  /// AUTO-CAPTURE (v4): the gate model watches the live preview,
+  /// about once per second. When a known leaf is seen clearly in two
+  /// frames in a row, the photo is taken by itself - like a document
+  /// scanner. The manual shutter button always stays available, and
+  /// any error quietly turns auto-capture off.
+  void _startWatch() {
+    final ctrl = _controller;
+    if (ctrl == null || widget.gate == null || _watching) return;
+    try {
+      ctrl.startImageStream(_onFrame);
+      _watching = true;
+    } catch (_) {
+      _watching = false;
+    }
+  }
+
+  Future<void> _stopWatch() async {
+    if (!_watching) return;
+    _watching = false;
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+  }
+
+  Future<void> _onFrame(cam.CameraImage frame) async {
+    if (_frameBusy || _busy || !mounted) return;
+    final now = DateTime.now();
+    if (now.difference(_lastFrameCheck).inMilliseconds < 900) return;
+    _lastFrameCheck = now;
+    _frameBusy = true;
+    try {
+      final gate = widget.gate;
+      final ctrl = _controller;
+      if (gate == null || ctrl == null) return;
+      final image = cameraFrameToImage(frame);
+      if (image == null) return;
+      // Preview frames arrive in the sensor's own orientation, and
+      // the exact turn differs by phone - so test the frame at the
+      // sensor orientation AND turned 180 degrees more, and keep the
+      // reading that sees a known leaf most strongly.
+      final baseAngle = ctrl.description.sensorOrientation.toDouble();
+      String bestLabel = '';
+      double bestKnown = -1;
+      for (final angle in [baseAngle, (baseAngle + 180) % 360]) {
+        final view =
+            angle == 0 ? image : img.copyRotate(image, angle: angle);
+        final probs = gate.probsForImage(view);
+        final ki = gate.labels.indexOf('known_leaf');
+        if (ki < 0) return;
+        int bi = 0;
+        for (int c = 1; c < probs.length; c++) {
+          if (probs[c] > probs[bi]) bi = c;
+        }
+        if (probs[ki] > bestKnown) {
+          bestKnown = probs[ki];
+          bestLabel = gate.labels[bi];
+        }
+      }
+      if (!mounted) return;
+      if (bestLabel == 'known_leaf' && bestKnown >= kGateKnownThreshold) {
+        _knownStreak++;
+        if (_knownStreak >= 2) {
+          setState(() => _status = widget.urdu
+              ? 'پتا مل گیا! تصویر لی جا رہی ہے…'
+              : 'Leaf found! Taking the photo…');
+          await _stopWatch();
+          await _capture();
+          return;
+        }
+        setState(() => _status = widget.urdu
+            ? 'پتا نظر آ رہا ہے — ثابت رکھیں…'
+            : 'Leaf in view - hold still…');
+      } else {
+        _knownStreak = 0;
+        setState(() => _status = widget.urdu
+            ? 'ایک پتا فریم کے اندر رکھیں'
+            : 'Place one leaf inside the frame');
+      }
+    } catch (_) {
+      // One bad frame must never break the scanner.
+    } finally {
+      _frameBusy = false;
     }
   }
 
@@ -2020,6 +2351,7 @@ class _ScannerScreenState extends State<ScannerScreen>
     final ctrl = _controller;
     if (ctrl == null || _busy) return;
     setState(() => _busy = true);
+    await _stopWatch(); // takePicture() cannot run during the image stream
     try {
       final shot = await ctrl.takePicture();
       if (!mounted) return;
@@ -2066,6 +2398,7 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 
   Future<void> _gallery() async {
+    await _stopWatch();
     final picked = await ImagePicker()
         .pickImage(source: ImageSource.gallery, imageQuality: 90);
     if (!mounted) return;
@@ -2075,6 +2408,14 @@ class _ScannerScreenState extends State<ScannerScreen>
   @override
   void dispose() {
     _anim.dispose();
+    if (_watching) {
+      _watching = false;
+      final ctrl = _controller;
+      if (ctrl != null) {
+        // Fire and forget: the screen is going away anyway.
+        unawaited(ctrl.stopImageStream().catchError((_) => null));
+      }
+    }
     _controller?.dispose();
     super.dispose();
   }
@@ -2111,9 +2452,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                   left: 24,
                   right: 24,
                   child: Text(
-                    widget.urdu
-                        ? 'ایک پتا فریم کے اندر رکھیں'
-                        : 'Place one leaf inside the frame',
+                    _status,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                         color: Colors.white,
@@ -2152,7 +2491,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                                   child: CircularProgressIndicator(
                                       color: Colors.white),
                                 )
-                              : const Icon(Icons.camera_alt,
+                              : const Icon(Icons.document_scanner,
                                   color: Colors.white, size: 34),
                         ),
                       ),

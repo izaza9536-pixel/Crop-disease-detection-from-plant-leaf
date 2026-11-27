@@ -29,7 +29,9 @@ No internet is needed for diagnosis — an important requirement for farms and v
 
 - **On-device AI diagnosis** — Float16 TensorFlow Lite model (6.11 MB) runs fully offline on the phone
 - **32 disease classes** across **7 crops** — Maize, Potato, Tomato, Wheat, Sugarcane, Rice and Cotton (see list below)
-- **Scanner-style camera** — live preview with a framing guide; camera photos are auto-straightened and centre-cropped before diagnosis, gallery photos work too
+- **Scanner-style camera with auto-capture** — live preview with a framing guide; the scanner takes the photo by itself when a leaf is properly in frame (manual shutter also available); camera photos are auto-straightened and centre-cropped before diagnosis, gallery photos work too
+- **Safety gate (two-stage AI)** — a small 3-class gate model checks every photo first: non-leaf objects are refused with "This does not look like a leaf", and plants outside the 7 known crops get an honest "This plant is not in our system" instead of a forced wrong answer
+- **Angle-robust diagnosis** — predictions are averaged over 4 rotations (0°/90°/180°/270°), so tilted leaf photos still diagnose correctly
 - **Treatment & prevention advice** for every class, in **English and Urdu**
 - **Login screen** (name + mobile, stored locally on the phone) with a **Guest mode**, so no farmer is ever blocked from a diagnosis
 - **Personal profile** — user details, total diagnoses, pending-sync count and last diagnosis
@@ -49,6 +51,8 @@ No internet is needed for diagnosis — an important requirement for farms and v
 | Test accuracy | **94.06%** (2,960 of 3,147 held-out test photos) |
 | Macro F1-score | **0.926** |
 | Mobile model | `model.tflite` — Float16 quantized, **6.11 MB**, input 224×224 |
+| Gate model | `gate_model.tflite` — MobileNetV3Small, 3 classes (known leaf / other leaf / not a leaf), Float16, 1.95 MB |
+| Gate test accuracy | **91.85%** (3,300 held-out photos); trained with PlantVillage + PlantDoc field photos + Caltech-256 real-world objects, so everyday objects (packets, hands, tools) are refused as "not a leaf" |
 | Inference | 100% on-device (TensorFlow Lite), no server needed |
 
 **Accuracy by crop (held-out test set):**
@@ -101,7 +105,7 @@ No internet is needed for diagnosis — an important requirement for farms and v
 # 2. Create a Flutter project and copy these files into it:
 #    lib/main.dart  ->  <project>/lib/main.dart
 #    pubspec.yaml   ->  <project>/pubspec.yaml
-#    assets/*       ->  <project>/assets/        (model.tflite, labels.txt, logo.png, plants_bg.jpg)
+#    assets/*       ->  <project>/assets/        (model.tflite, labels.txt, gate_model.tflite, gate_labels.txt, logo.png, plants_bg.jpg)
 #    android/app/src/main/res/*  ->  app icon files (Logo: AI Scan Leaf)
 
 # 3. In android/app/src/main/AndroidManifest.xml:
@@ -123,6 +127,8 @@ flutter run
 ├── assets/
 │   ├── model.tflite         # Float16 MobileNetV3 model (6.11 MB)
 │   ├── labels.txt           # 32 class labels (exact training order)
+│   ├── gate_model.tflite    # Float16 gate model (1.95 MB) — known leaf / other plant / not a leaf
+│   ├── gate_labels.txt      # 3 gate class labels
 │   ├── logo.png             # App logo (AI Scan Leaf)
 │   └── plants_bg.jpg        # Home-screen background (bamboo)
 ├── android/app/src/main/res/  # Android app-icon files (all mipmap sizes)

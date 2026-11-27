@@ -29,5 +29,7 @@ flutter:
   assets:
     - assets/model.tflite     # <-- YOU copy your trained model here
     - assets/labels.txt       # 32 classes, included in this package
+    - assets/gate_model.tflite # v4 gate model (known / not-leaf / other plant)
+    - assets/gate_labels.txt   # gate labels: known_leaf, not_leaf, other_leaf
     - assets/plants_bg.jpg    # plants background (bottom of home screen)
     - assets/logo.png         # CropCare AI Logo 2 - AI Scan Leaf
